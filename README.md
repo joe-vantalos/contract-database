@@ -8,6 +8,8 @@ This is a learning build and a stepping stone: the same interface is
 intended to become a personal task manager, with real tasks in place of
 contracts. The code is organised so that swap touches one section.
 
+Live at **https://joe-vantalos.github.io/contract-database/**
+
 ## Running it
 
 Double-click `index.html`. That's the whole thing.
