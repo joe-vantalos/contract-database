@@ -1,0 +1,1309 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>contract database</title>
+<style>
+/* ==========================================================================
+   1. PALETTE AND TYPE TOKENS
+   Every colour and font in the app is named here and used by reference
+   below. These are "CSS custom properties" (also called CSS variables).
+   Change a value here and it changes everywhere at once -- which is how
+   you re-skin the whole screen in about six lines.
+   ========================================================================== */
+:root {
+  --bg:         #07080a;   /* the void behind the window */
+  --frame:      #0d0f12;   /* the window chrome */
+  --panel:      #12151a;   /* standard panel surface */
+  --panel-2:    #171b21;   /* raised / inset panel surface */
+  --line:       #262b32;   /* hairline borders */
+  --line-hot:   #3b434d;   /* borders on hover or focus */
+  --text:       #e6e9ec;   /* primary text */
+  --text-dim:   #7f8891;   /* labels, secondary text */
+  --text-faint: #4a525a;   /* disabled, decorative text */
+  --accent:     #8fd0d6;   /* selection, active state */
+  --accent-bg:  #16292c;   /* selection background wash */
+  --money:      #e0b04a;   /* currency values */
+  --locked:     #4e5864;   /* the locked VIP entry */
+
+  /* A condensed sans gets us close to the game's look with zero downloads.
+     Arial Narrow ships with macOS; the rest are fallbacks. */
+  --font: "Arial Narrow", "Helvetica Neue", "Franklin Gothic Medium", Arial, sans-serif;
+
+  --gap: 10px;
+}
+
+/* ==========================================================================
+   2. RESET AND PAGE
+   ========================================================================== */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body { height: 100%; }
+
+body {
+  background: var(--bg);
+  /* A faint radial glow behind the window, so it reads as a lit screen
+     in a dark room rather than a flat rectangle. */
+  background-image: radial-gradient(ellipse at 50% 40%, #14181d 0%, #07080a 70%);
+  color: var(--text);
+  font-family: var(--font);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* The scanline + vignette overlay. It sits above everything, and
+   pointer-events:none means clicks pass straight through it. */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 100;
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      rgba(255,255,255,0.016) 0px,
+      rgba(255,255,255,0.016) 1px,
+      transparent 1px,
+      transparent 3px
+    ),
+    radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.55) 100%);
+}
+
+/* ==========================================================================
+   3. WINDOW FRAME
+   ========================================================================== */
+.window {
+  width: min(1180px, 100%);
+  height: min(720px, 100%);
+  background: var(--frame);
+  border: 1px solid var(--line);
+  display: grid;
+  grid-template-rows: 34px 1fr;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.6), 0 30px 80px rgba(0,0,0,0.7);
+  /* Clipped top-right corner -- the angled-panel motif, done with geometry
+     rather than an image. */
+  clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 0 100%);
+}
+
+.titlebar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(to bottom, #15191e, #0d0f12);
+}
+.titlebar__dot {
+  width: 7px; height: 7px;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+}
+.titlebar__title {
+  font-size: 13px;
+  letter-spacing: 0.22em;
+  text-transform: lowercase;
+  color: var(--text-dim);
+}
+.titlebar__right {
+  margin-left: auto;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  color: var(--text-faint);
+}
+
+/* ==========================================================================
+   4. THE TWO-COLUMN BODY
+   CSS Grid divides the window into named regions. This is the skeleton
+   everything else hangs on.
+   ========================================================================== */
+.body {
+  display: grid;
+  grid-template-columns: 290px 1fr;
+  min-height: 0;   /* lets children scroll instead of blowing out the grid */
+}
+
+/* ---------- SIDEBAR ---------- */
+.sidebar {
+  border-right: 1px solid var(--line);
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  min-height: 0;
+  background: var(--panel);
+}
+
+.sidebar__header {
+  padding: 14px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.sidebar__header h2 {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.sidebar__count {
+  margin-left: auto;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--text-faint);
+}
+
+.sidebar__list { padding: 8px; overflow-y: auto; min-height: 0; }
+
+/* ---------- A CONTRACT ROW ---------- */
+.row {
+  position: relative;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-left: 2px solid transparent;
+  color: var(--text-dim);
+  font-family: var(--font);
+  padding: 9px 22px 9px 12px;   /* right padding reserves room for the chevron */
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  transition: background 90ms linear, color 90ms linear, border-color 90ms linear;
+}
+.row + .row { margin-top: 2px; }
+.row:hover:not(:disabled) { background: var(--panel-2); color: var(--text); }
+.row:focus-visible { outline: none; border-color: var(--line-hot); }
+
+.row__body { min-width: 0; }
+
+.row__icon { width: 18px; height: 18px; color: currentColor; opacity: 0.75; }
+.row__icon svg { width: 100%; height: 100%; display: block; }
+
+.row__name {
+  display: block;
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.row__meta {
+  display: block;
+  margin-top: 3px;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: var(--text-faint);
+  text-transform: uppercase;
+}
+
+/* Selected row: accent bar, wash, brighter text, and a chevron drawn with
+   a pseudo-element (a decorative box CSS invents, so it never clutters
+   the markup). */
+.row.is-selected {
+  background: var(--accent-bg);
+  border-left-color: var(--accent);
+  color: var(--text);
+}
+.row.is-selected .row__icon { opacity: 1; color: var(--accent); }
+.row.is-selected::after {
+  content: "";
+  position: absolute;
+  right: 8px; top: 50%;
+  width: 5px; height: 5px;
+  border-right: 1px solid var(--accent);
+  border-top: 1px solid var(--accent);
+  transform: translateY(-50%) rotate(45deg);
+}
+
+/* An accepted-but-unfinished contract pulses gently so it reads as live. */
+.row.is-active .row__meta { color: var(--accent); }
+.row.is-active .row__icon { color: var(--accent); opacity: 1; }
+
+.row:disabled { cursor: default; }
+
+/* ---------- LOCKED VIP ENTRY ---------- */
+.vip {
+  margin: 8px;
+  padding: 11px 12px;
+  border: 1px dashed var(--locked);
+  background: repeating-linear-gradient(
+    45deg,
+    rgba(255,255,255,0.012) 0px, rgba(255,255,255,0.012) 6px,
+    transparent 6px, transparent 12px
+  );
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  gap: 10px;
+  align-items: center;
+  color: var(--locked);
+  cursor: not-allowed;
+}
+.vip.is-unlocked {
+  border-style: solid;
+  border-color: var(--money);
+  color: var(--money);
+  background: rgba(224,176,74,0.05);
+  cursor: pointer;
+}
+.vip__icon { width: 18px; height: 18px; }
+.vip__icon svg { width: 100%; height: 100%; display: block; }
+.vip__name {
+  display: block;
+  font-size: 13px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.vip__sub {
+  display: block;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  opacity: 0.8;
+  margin-top: 2px;
+}
+
+.sidebar__tools { padding: 8px; border-top: 1px solid var(--line); }
+
+/* ---------- STATS BLOCK (bottom left) ---------- */
+.stats {
+  padding: 12px 14px 14px;
+  border-top: 1px solid var(--line);
+  background: #0f1216;
+}
+.stats__title {
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-bottom: 9px;
+}
+.stat {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  letter-spacing: 0.07em;
+  padding: 2px 0;
+}
+.stat__label {
+  text-transform: uppercase;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* A dotted leader line between label and value, the way a printed
+   invoice or a game stats screen does it. */
+.stat__rule {
+  flex: 1;
+  border-bottom: 1px dotted var(--line);
+  transform: translateY(-3px);
+  min-width: 10px;
+}
+.stat__value { color: var(--text); font-variant-numeric: tabular-nums; }
+.stat__value.is-money { color: var(--money); }
+
+/* ==========================================================================
+   5. MAIN COLUMN
+   Tab header, large display, brief, details, action row.
+   ========================================================================== */
+.main {
+  display: grid;
+  grid-template-rows: 44px 1fr auto auto 58px;
+  min-height: 0;
+  background: var(--frame);
+}
+
+.tabhead {
+  display: flex;
+  align-items: center;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  gap: 14px;
+}
+.tabhead__name {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+.tabhead__tier {
+  margin-left: auto;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--accent);
+  border: 1px solid var(--accent-bg);
+  background: var(--accent-bg);
+  padding: 3px 9px;
+}
+
+/* ---------- LARGE DISPLAY PANEL ---------- */
+.display {
+  margin: var(--gap) 18px;
+  border: 1px solid var(--line);
+  background: #0b0e11;
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+}
+.display > svg { width: 100%; height: 100%; display: block; }
+
+/* Corner crop marks, drawn with two pseudo-elements and four borders. */
+.display::before,
+.display::after {
+  content: "";
+  position: absolute;
+  width: 16px; height: 16px;
+  pointer-events: none;
+}
+.display::before {
+  top: 7px; left: 7px;
+  border-top: 1px solid var(--line-hot);
+  border-left: 1px solid var(--line-hot);
+}
+.display::after {
+  bottom: 7px; right: 7px;
+  border-bottom: 1px solid var(--line-hot);
+  border-right: 1px solid var(--line-hot);
+}
+
+/* ---------- BRIEF PANEL ---------- */
+.brief {
+  margin: 0 18px var(--gap);
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--line-hot);
+  background: var(--panel);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  line-height: 1.45;
+}
+
+/* ---------- DETAILS PANEL ---------- */
+.details {
+  margin: 0 18px var(--gap);
+  border: 1px solid var(--line);
+  background: var(--panel);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+.detail { padding: 11px 14px; }
+.detail + .detail { border-left: 1px solid var(--line); }
+.detail__label {
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-bottom: 4px;
+}
+.detail__value {
+  font-size: 19px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
+}
+.detail__value.is-money { color: var(--money); }
+
+/* ---------- ACTION ROW ---------- */
+.actions {
+  border-top: 1px solid var(--line);
+  padding: 0 18px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  background: var(--panel);
+}
+.actions__note {
+  margin-right: auto;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+/* ---------- BRACKETED BUTTON ---------- */
+/* The brackets are generated by CSS, not typed into the markup, so the
+   button's text stays clean and the brackets can animate on their own. */
+.btn {
+  position: relative;
+  background: transparent;
+  border: 0;
+  color: var(--text-dim);
+  font-family: var(--font);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  padding: 8px 26px;
+  cursor: pointer;
+  transition: color 110ms linear;
+}
+.btn::before, .btn::after {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  transition: color 110ms linear, transform 110ms ease-out;
+  font-weight: 400;
+}
+.btn::before { content: "["; left: 6px; }
+.btn::after  { content: "]"; right: 6px; }
+
+.btn:hover:not(:disabled) { color: var(--text); }
+.btn:hover:not(:disabled)::before { transform: translateY(-50%) translateX(-3px); }
+.btn:hover:not(:disabled)::after  { transform: translateY(-50%) translateX(3px); }
+.btn:active:not(:disabled) { color: var(--accent); }
+.btn:focus-visible { outline: 1px solid var(--line-hot); outline-offset: 2px; }
+.btn:disabled { color: var(--text-faint); cursor: not-allowed; }
+
+.btn--primary { color: var(--text); }
+.btn--primary:hover:not(:disabled) { color: var(--accent); }
+.btn--go { color: var(--accent); }
+.btn--go:hover:not(:disabled) { color: #c6eef2; }
+.btn--small { font-size: 12px; letter-spacing: 0.16em; padding: 6px 20px; }
+
+/* ---------- EMPTY STATE ---------- */
+/* A screen is never one design. This is what the right-hand side looks
+   like when nothing is selected. */
+.empty {
+  display: grid;
+  place-content: center;
+  gap: 8px;
+  text-align: center;
+  height: 100%;
+  color: var(--text-faint);
+}
+.empty__line {
+  font-size: 12px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+/* Small screens: stack instead of shattering. Not a responsive design --
+   just a floor so the thing stays usable on a laptop. */
+@media (max-width: 820px) {
+  .body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+  .sidebar { border-right: 0; border-bottom: 1px solid var(--line); }
+  .window { height: auto; min-height: min(720px, 100%); }
+}
+</style>
+</head>
+
+<body>
+
+<!-- ==========================================================================
+     THE SHELL
+     This markup is the fixed furniture: the regions that always exist.
+     Everything inside an element with an id is written by JavaScript from
+     the application state. Nothing below is hard-coded content.
+     ========================================================================== -->
+<main class="window">
+
+  <header class="titlebar">
+    <span class="titlebar__dot"></span>
+    <span class="titlebar__title">contract database</span>
+    <span class="titlebar__right" id="clock"></span>
+  </header>
+
+  <div class="body">
+
+    <!-- ---------- SIDEBAR ---------- -->
+    <aside class="sidebar">
+      <div class="sidebar__header">
+        <h2>Security Contracts</h2>
+        <span class="sidebar__count" id="board-count"></span>
+      </div>
+
+      <div class="sidebar__list" id="board"></div>
+
+      <div>
+        <div class="vip" id="vip"></div>
+        <div class="sidebar__tools">
+          <button class="btn btn--small" id="btn-refresh" type="button">Refresh</button>
+        </div>
+      </div>
+
+      <div class="stats">
+        <div class="stats__title">Agency Status</div>
+        <div id="stats"></div>
+      </div>
+    </aside>
+
+    <!-- ---------- MAIN ---------- -->
+    <section class="main" id="main"></section>
+
+  </div>
+</main>
+
+<script>
+"use strict";
+/* ==========================================================================
+   HOW THIS FILE IS ORGANISED
+   --------------------------------------------------------------------------
+   1. DATA     the fixed catalogue. Never changes while the app runs.
+   2. STORE    the only code that touches the browser's saved data.
+   3. LOGIC    pure functions. Given inputs, return outputs, touch nothing.
+   4. ACTIONS  change the state object, then ask for a redraw.
+   5. RENDER   read the state object, write the screen. Never the reverse.
+   6. WIRE UP  connect clicks and keys to actions, then start.
+
+   THE ONE RULE: click handlers change data. They never touch the screen.
+   render() draws the entire screen from the data. Anything that wants the
+   screen to change, changes the data and calls render().
+   ========================================================================== */
+
+
+/* ==========================================================================
+   1. DATA -- THE CATALOGUE
+   ========================================================================== */
+
+/* The six security contract types. These are fixed facts about the game,
+   not state -- nothing the player does ever changes this list. */
+const CONTRACT_TYPES = [
+  {
+    id: "asset-protection",
+    name: "Asset Protection",
+    statLabel: "Assets Protected",
+    brief: "A client's high-value asset is exposed and the competition knows it. Secure the asset and move it before they arrive."
+  },
+  {
+    id: "gang-termination",
+    name: "Gang Termination",
+    statLabel: "Gangs Terminated",
+    brief: "A street crew has outgrown its territory and started taking liberties. Reduce their numbers and make the message legible."
+  },
+  {
+    id: "liquidize-assets",
+    name: "Liquidize Assets",
+    statLabel: "Assets Liquidized",
+    brief: "A stockpile of untraceable product needs to stop existing. Burn it, bury it, or move it on -- the client isn't particular."
+  },
+  {
+    id: "recover-valuables",
+    name: "Recover Valuables",
+    statLabel: "Valuables Recovered",
+    brief: "A shipment went missing somewhere between the dock and the buyer. Track the cargo, clear the holders, bring it home."
+  },
+  {
+    id: "rescue-operation",
+    name: "Rescue Operation",
+    statLabel: "Rescues Completed",
+    brief: "A client's associate is being held against their will at a known address. Go in quiet and bring them out breathing."
+  },
+  {
+    id: "vehicle-recovery",
+    name: "Vehicle Recovery",
+    statLabel: "Vehicles Recovered",
+    brief: "A vehicle of interest has changed hands without paperwork. Reacquire it undamaged and deliver it to the drop."
+  }
+];
+
+/* The three difficulty tiers. A tier sets the payout range; the exact
+   payout is rolled per contract. */
+const DIFFICULTY_TIERS = [
+  { id: "professional",    name: "Professional", minPayout: 31000, maxPayout: 42000 },
+  { id: "specialist",      name: "Specialist",   minPayout: 44000, maxPayout: 56000 },
+  { id: "specialist-plus", name: "Specialist+",  minPayout: 60000, maxPayout: 70000 }
+];
+
+/* Every tunable number in one place. If you want to change how the agency
+   economy behaves, you change it here and nowhere else. */
+const RULES = {
+  boardSize: 3,              // contracts offered at a time
+  contractsPerSafeStep: 5,   // completions needed per income increase
+  safeIncomeStep: 500,       // dollars added per step
+  safeIncomeCap: 20000,      // maximum daily income
+  safeCapacity: 250000,      // how much the safe holds
+  payoutRoundTo: 50          // round rolled payouts to a tidy number
+};
+
+/* Hand-drawn SVG icons. Each is a string of SVG markup using
+   `currentColor`, which means the icon inherits whatever text colour its
+   container has -- so selecting a row recolours its icon for free. */
+const ICONS = {
+  "asset-protection":
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M12 2.6l8 3.1v5.6c0 4.8-3.3 9-8 10.1-4.7-1.1-8-5.3-8-10.1V5.7l8-3.1z"/><path d="M8.6 12.2l2.6 2.6 4.4-4.9"/></svg>',
+  "gang-termination":
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="12" cy="12" r="7.6"/><circle cx="12" cy="12" r="2.1"/><path d="M12 1.2v4.2M12 18.6v4.2M1.2 12h4.2M18.6 12h4.2"/></svg>',
+  "liquidize-assets":
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.2" y="6.4" width="19.6" height="11.2"/><circle cx="12" cy="12" r="2.6"/><path d="M5.4 9.6v4.8M18.6 9.6v4.8"/></svg>',
+  "recover-valuables":
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.4" y="7.2" width="19.2" height="13.4"/><path d="M8.6 7.2V4.9c0-.7.6-1.3 1.3-1.3h4.2c.7 0 1.3.6 1.3 1.3v2.3"/><path d="M2.4 13.1h19.2"/><path d="M10.6 13.1h2.8"/></svg>',
+  "rescue-operation":
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="12" cy="5.4" r="2.8"/><path d="M12 8.6v7.1M12 15.7l-3.1 5M12 15.7l3.1 5"/><path d="M5.6 11.1l6.4 1.4 6.4-1.4"/></svg>',
+  "vehicle-recovery":
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.4 15.4v-2.6l2.1-4.4c.3-.6.9-1 1.6-1h11.8c.7 0 1.3.4 1.6 1l2.1 4.4v2.6"/><path d="M2.4 15.4h19.2"/><circle cx="7.1" cy="17.3" r="1.9"/><circle cx="16.9" cy="17.3" r="1.9"/><path d="M5.1 12.4h13.8"/></svg>',
+  "lock":
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="4.4" y="10.6" width="15.2" height="10.6"/><path d="M8.1 10.6V7.3a3.9 3.9 0 017.8 0v3.3"/><path d="M12 14.6v2.8"/></svg>',
+  "star":
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M12 2.8l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.7l-5.9 3.1 1.2-6.5-4.8-4.6 6.6-.9z"/></svg>'
+};
+
+
+/* ==========================================================================
+   2. STORE -- THE SEAM
+   --------------------------------------------------------------------------
+   These four functions are the ONLY code in the file that knows the data
+   lives in localStorage. To move this app to a server later, you rewrite
+   these four and change nothing else. That is what "a seam" means.
+
+   SCHEMA_VERSION is insurance. If you later change the shape of a saved
+   contract, bump this number; old saves no longer match, so loadState
+   throws them away and starts fresh instead of crashing on data it can't
+   understand.
+   ========================================================================== */
+
+const STORAGE_KEY = "contract-database";
+const SCHEMA_VERSION = 1;
+
+function createInitialState() {
+  const board = rollBoard([]);
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    board: board,
+    selectedId: board[0] ? board[0].id : null,
+    completed: []
+  };
+}
+
+function loadState() {
+  /* Reading saved data is the most hostile moment in any app: the data
+     might be missing, half-written, from an older version, or from a
+     browser that blocks storage entirely. Every one of those must end in
+     a working app, so all of them fall through to a fresh state. */
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return createInitialState();
+
+    const parsed = JSON.parse(raw);
+    if (!parsed || parsed.schemaVersion !== SCHEMA_VERSION) {
+      console.warn("[cdb] save is missing or from another version -- starting fresh");
+      return createInitialState();
+    }
+    if (!Array.isArray(parsed.board) || !Array.isArray(parsed.completed)) {
+      console.warn("[cdb] save is malformed -- starting fresh");
+      return createInitialState();
+    }
+    return parsed;
+  } catch (err) {
+    console.warn("[cdb] could not read save:", err);
+    return createInitialState();
+  }
+}
+
+function saveState(state) {
+  /* JSON.stringify turns a live JavaScript object into text, because
+     localStorage can only hold text. This converting-to-text-and-back is
+     called serialisation, and it is what every save file, API request and
+     database write is doing underneath. */
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch (err) {
+    console.warn("[cdb] could not save:", err);
+  }
+}
+
+function clearSave() {
+  try { window.localStorage.removeItem(STORAGE_KEY); } catch (err) {}
+}
+
+
+/* ==========================================================================
+   3. LOGIC -- PURE FUNCTIONS
+   --------------------------------------------------------------------------
+   A "pure" function depends only on what you pass in and changes nothing
+   outside itself. That makes it trivial to reason about and to test: the
+   same inputs always give the same outputs. Everything in this section is
+   pure except the three that call Math.random, which is noted where it
+   matters.
+   ========================================================================== */
+
+function findType(typeId) {
+  return CONTRACT_TYPES.find(function (t) { return t.id === typeId; });
+}
+
+function findTier(tierId) {
+  return DIFFICULTY_TIERS.find(function (t) { return t.id === tierId; });
+}
+
+function randomInt(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function pickRandom(list) {
+  return list[Math.floor(Math.random() * list.length)];
+}
+
+/* Every offered contract gets its own id, generated here. Identity ("which
+   contract is this?") is kept separate from value ("what are its
+   properties?") on purpose -- otherwise two contracts that happen to look
+   alike become indistinguishable. */
+let idCounter = 0;
+function newId() {
+  idCounter += 1;
+  return "c" + Date.now().toString(36) + "-" + idCounter;
+}
+
+function rollPayout(tier) {
+  const raw = randomInt(tier.minPayout, tier.maxPayout);
+  return Math.round(raw / RULES.payoutRoundTo) * RULES.payoutRoundTo;
+}
+
+/* Roll one contract: pick a tier at random, then a payout inside that
+   tier's range. Note what this function does NOT do -- it doesn't put the
+   contract anywhere or draw anything. It just decides. */
+function rollContract(typeId) {
+  const tier = pickRandom(DIFFICULTY_TIERS);
+  return {
+    id: newId(),
+    typeId: typeId,
+    tierId: tier.id,
+    payout: rollPayout(tier),
+    status: "available"
+  };
+}
+
+/* Draw a board of distinct types, avoiding any type ids passed in
+   `excludeTypeIds` (used so a replacement contract never duplicates one
+   already on the board). */
+function rollBoard(excludeTypeIds) {
+  const pool = CONTRACT_TYPES
+    .filter(function (t) { return excludeTypeIds.indexOf(t.id) === -1; })
+    .map(function (t) { return t.id; });
+
+  /* Shuffle, then take the first N. Shuffling and slicing is the simplest
+     correct way to draw without repeats. */
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const tmp = pool[i]; pool[i] = pool[j]; pool[j] = tmp;
+  }
+
+  return pool.slice(0, RULES.boardSize).map(rollContract);
+}
+
+/* --------------------------------------------------------------------------
+   DERIVED STATE
+   Nothing below is stored. Every number the agency status block shows is
+   worked out from the completed-contract log each time the screen draws.
+   Storing these as well would give you two places claiming to know the
+   truth, and the day they disagree you get a bug with no visible cause.
+   -------------------------------------------------------------------------- */
+function deriveStats(state) {
+  const log = state.completed;
+
+  const countsByType = {};
+  for (let i = 0; i < log.length; i++) {
+    const id = log[i].typeId;
+    countsByType[id] = (countsByType[id] || 0) + 1;
+  }
+
+  const earnings = log.reduce(function (sum, entry) { return sum + entry.payout; }, 0);
+
+  const steps = Math.floor(log.length / RULES.contractsPerSafeStep);
+  const safeIncome = Math.min(RULES.safeIncomeCap, steps * RULES.safeIncomeStep);
+
+  /* VIP unlock rule: one completion of each of the six types. Swap this
+     for a flat threshold by replacing the two lines below. */
+  const typesCompleted = Object.keys(countsByType).length;
+  const vipUnlocked = typesCompleted >= CONTRACT_TYPES.length;
+
+  return {
+    totalCompleted: log.length,
+    countsByType: countsByType,
+    earnings: earnings,
+    safeIncome: safeIncome,
+    safeIncomeCapped: safeIncome >= RULES.safeIncomeCap,
+    typesCompleted: typesCompleted,
+    typesRequired: CONTRACT_TYPES.length,
+    vipUnlocked: vipUnlocked
+  };
+}
+
+function money(amount) {
+  return "$" + amount.toLocaleString("en-US");
+}
+
+
+/* ==========================================================================
+   4. ACTIONS -- CHANGE STATE, THEN REDRAW
+   --------------------------------------------------------------------------
+   `state` is the single object holding everything the app knows. Actions
+   are the only functions allowed to change it. Notice that not one of them
+   touches the screen: they change data and call render(). That separation
+   is the whole architecture.
+   ========================================================================== */
+
+let state = loadState();
+
+function commit() {
+  saveState(state);
+  render();
+}
+
+function selectedContract() {
+  return state.board.find(function (c) { return c.id === state.selectedId; }) || null;
+}
+
+function activeContract() {
+  return state.board.find(function (c) { return c.status === "active"; }) || null;
+}
+
+function selectContract(id) {
+  state.selectedId = id;
+  commit();
+}
+
+/* Rerolls every slot that isn't mid-contract. An accepted contract stays
+   put -- you can't make a job you've taken on disappear by refreshing. */
+function refreshBoard() {
+  const kept = state.board.filter(function (c) { return c.status === "active"; });
+  const keptTypeIds = kept.map(function (c) { return c.typeId; });
+
+  const fresh = rollBoard(keptTypeIds).slice(0, RULES.boardSize - kept.length);
+  state.board = kept.concat(fresh);
+
+  /* If the contract that was selected just got rerolled away, move the
+     selection somewhere real rather than leaving it pointing at nothing. */
+  if (!state.board.some(function (c) { return c.id === state.selectedId; })) {
+    state.selectedId = state.board[0] ? state.board[0].id : null;
+  }
+  commit();
+}
+
+function acceptContract(id) {
+  if (activeContract()) return;            // one at a time
+  const contract = state.board.find(function (c) { return c.id === id; });
+  if (!contract || contract.status !== "available") return;
+
+  contract.status = "active";
+  state.selectedId = contract.id;
+  commit();
+}
+
+/* Completing is where the permanent record gets written. The payout is
+   copied into the log at this moment on purpose: if you later change the
+   tier ranges, history keeps the number that was actually paid. */
+function completeContract(id) {
+  const index = state.board.findIndex(function (c) { return c.id === id; });
+  if (index === -1) return;
+
+  const contract = state.board[index];
+  if (contract.status !== "active") return;
+
+  state.completed.push({
+    typeId: contract.typeId,
+    tierId: contract.tierId,
+    payout: contract.payout,
+    completedAt: new Date().toISOString()
+  });
+
+  /* The finished contract leaves the board and a fresh one is rolled into
+     its slot, avoiding the types still on offer. */
+  const othersTypeIds = state.board
+    .filter(function (c) { return c.id !== contract.id; })
+    .map(function (c) { return c.typeId; });
+
+  const replacement = rollBoard(othersTypeIds)[0];
+  state.board[index] = replacement;
+  state.selectedId = replacement.id;
+
+  commit();
+}
+
+/* Press the accept button: what it does depends on what's selected. */
+function primaryAction() {
+  const contract = selectedContract();
+  if (!contract) return;
+  if (contract.status === "active") completeContract(contract.id);
+  else acceptContract(contract.id);
+}
+
+/* --------------------------------------------------------------------------
+   TEST AFFORDANCES
+   The income cap is 200 completed contracts away, and the VIP unlock needs
+   one of every type. Neither is reachable by clicking during a test, so
+   here are deliberate hooks for reaching those states on demand. Building
+   these is normal engineering practice, not cheating.
+   -------------------------------------------------------------------------- */
+function devAddCompletions(count) {
+  for (let i = 0; i < count; i++) {
+    const type = pickRandom(CONTRACT_TYPES);
+    const tier = pickRandom(DIFFICULTY_TIERS);
+    state.completed.push({
+      typeId: type.id,
+      tierId: tier.id,
+      payout: rollPayout(tier),
+      completedAt: new Date().toISOString()
+    });
+  }
+  commit();
+}
+
+function devReset() {
+  clearSave();
+  state = createInitialState();
+  commit();
+}
+
+
+/* ==========================================================================
+   5. RENDER -- STATE IN, SCREEN OUT
+   --------------------------------------------------------------------------
+   render() reads `state`, works out the derived numbers, and rewrites the
+   four regions of the screen. It never changes state. Call it as often as
+   you like; the result only ever depends on the data.
+   ========================================================================== */
+
+/* Grab the fixed elements once, rather than searching the page every
+   redraw. `document.querySelector` finds an element by CSS selector. */
+const el = {
+  board:      document.querySelector("#board"),
+  boardCount: document.querySelector("#board-count"),
+  vip:        document.querySelector("#vip"),
+  stats:      document.querySelector("#stats"),
+  main:       document.querySelector("#main"),
+  refresh:    document.querySelector("#btn-refresh"),
+  clock:      document.querySelector("#clock")
+};
+
+/* Escape text before putting it into markup. None of the current data is
+   user-typed, so nothing here is dangerous yet -- but the moment contracts
+   become your own task titles, text you typed will be rendered as HTML,
+   and a stray `<` would break the page. Cheaper to do it from day one. */
+function esc(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/* Place one of the ICONS at a position inside a larger SVG. A nested <svg>
+   keeps the icon's own 24x24 coordinate system intact, so it scales
+   cleanly instead of being stretched. */
+function iconAt(name, x, y, size) {
+  return ICONS[name].replace(
+    "<svg ",
+    '<svg x="' + x + '" y="' + y + '" width="' + size + '" height="' + size + '" '
+  );
+}
+
+function renderSidebar(state) {
+  const active = activeContract();
+
+  el.board.innerHTML = state.board.map(function (contract) {
+    const type = findType(contract.typeId);
+    const tier = findTier(contract.tierId);
+
+    const classes = ["row"];
+    if (contract.id === state.selectedId) classes.push("is-selected");
+    if (contract.status === "active") classes.push("is-active");
+
+    const meta = contract.status === "active" ? "In Progress" : tier.name;
+
+    /* data-id carries the contract's identity on the element itself, so
+       the click handler can read it back without keeping a parallel list. */
+    return '' +
+      '<button type="button" class="' + classes.join(" ") + '" data-id="' + esc(contract.id) + '">' +
+        '<span class="row__icon">' + ICONS[type.id] + '</span>' +
+        '<span class="row__body">' +
+          '<span class="row__name">' + esc(type.name) + '</span>' +
+          '<span class="row__meta">' + esc(meta) + '</span>' +
+        '</span>' +
+      '</button>';
+  }).join("");
+
+  const availableCount = state.board.filter(function (c) { return c.status === "available"; }).length;
+  el.boardCount.textContent = active
+    ? availableCount + " open / 1 active"
+    : availableCount + " offered";
+}
+
+function renderVip(stats) {
+  if (stats.vipUnlocked) {
+    el.vip.className = "vip is-unlocked";
+    el.vip.innerHTML =
+      '<span class="vip__icon">' + ICONS.star + '</span>' +
+      '<span>' +
+        '<span class="vip__name">VIP Contract</span>' +
+        '<span class="vip__sub">Available &mdash; awaiting client</span>' +
+      '</span>';
+  } else {
+    el.vip.className = "vip";
+    el.vip.innerHTML =
+      '<span class="vip__icon">' + ICONS.lock + '</span>' +
+      '<span>' +
+        '<span class="vip__name">VIP Contract</span>' +
+        '<span class="vip__sub">Locked &mdash; ' + stats.typesCompleted + '/' +
+          stats.typesRequired + ' contract types</span>' +
+      '</span>';
+  }
+}
+
+function renderStats(state, stats) {
+  const contract = selectedContract();
+  const type = contract ? findType(contract.typeId) : null;
+
+  const rows = [];
+
+  /* The type-specific counter follows whatever is selected. */
+  if (type) {
+    rows.push({
+      label: type.statLabel,
+      value: String(stats.countsByType[type.id] || 0)
+    });
+  }
+
+  rows.push({ label: "Contracts Complete", value: String(stats.totalCompleted) });
+  rows.push({ label: "Total Earnings", value: money(stats.earnings), money: true });
+  rows.push({
+    label: "Safe Income",
+    value: money(stats.safeIncome) + " /DAY" + (stats.safeIncomeCapped ? " (MAX)" : ""),
+    money: true
+  });
+  rows.push({ label: "Safe Capacity", value: money(RULES.safeCapacity), money: true });
+
+  el.stats.innerHTML = rows.map(function (row) {
+    return '' +
+      '<div class="stat">' +
+        '<span class="stat__label">' + esc(row.label) + '</span>' +
+        '<span class="stat__rule"></span>' +
+        '<span class="stat__value' + (row.money ? " is-money" : "") + '">' + esc(row.value) + '</span>' +
+      '</div>';
+  }).join("");
+}
+
+/* The large display panel: a hand-drawn SVG "intel" graphic built from the
+   contract's type. No images, no assets -- just coordinates. */
+function renderDisplay(contract) {
+  if (!contract) {
+    return '' +
+      '<div class="empty">' +
+        '<div class="empty__line">No contract selected</div>' +
+        '<div class="empty__line" style="color:var(--text-faint);opacity:.6">' +
+          'Choose an entry from the database' +
+        '</div>' +
+      '</div>';
+  }
+
+  const type = findType(contract.typeId);
+  const tier = findTier(contract.tierId);
+  const isActive = contract.status === "active";
+
+  return '' +
+  '<svg viewBox="0 0 400 230" preserveAspectRatio="xMidYMid meet" role="img" ' +
+       'aria-label="' + esc(type.name) + ' intel graphic">' +
+    '<defs>' +
+      '<pattern id="grid" width="16" height="16" patternUnits="userSpaceOnUse">' +
+        '<path d="M16 0H0v16" fill="none" stroke="#171c22" stroke-width="1"/>' +
+      '</pattern>' +
+    '</defs>' +
+
+    '<rect width="400" height="230" fill="url(#grid)"/>' +
+
+    /* Concentric rings behind the glyph, like a targeting overlay. */
+    '<g fill="none" stroke="#222930">' +
+      '<circle cx="200" cy="104" r="78"/>' +
+      '<circle cx="200" cy="104" r="56"/>' +
+      '<circle cx="200" cy="104" r="34" stroke="#2b333b"/>' +
+    '</g>' +
+    '<g stroke="#2b333b" stroke-width="1">' +
+      '<path d="M200 14v16M200 178v16M106 104h16M278 104h16"/>' +
+    '</g>' +
+
+    /* The type glyph, centred and large. */
+    '<g style="color:' + (isActive ? "#8fd0d6" : "#5d666f") + '">' +
+      iconAt(type.id, 164, 68, 72) +
+    '</g>' +
+
+    /* Technical furniture: labels in the corners. */
+    '<text x="14" y="22" fill="' + (isActive ? "#8fd0d6" : "#3f474f") + '" ' +
+          'font-family="Arial Narrow, Arial" font-size="11" letter-spacing="2">' +
+      (isActive ? "// ACTIVE CONTRACT" : "// AGENCY INTEL") +
+    '</text>' +
+    '<text x="386" y="22" text-anchor="end" fill="#3f474f" ' +
+          'font-family="Arial Narrow, Arial" font-size="11" letter-spacing="2">' +
+      esc(tier.name.toUpperCase()) +
+    '</text>' +
+    '<text x="200" y="208" text-anchor="middle" fill="#4a525a" ' +
+          'font-family="Arial Narrow, Arial" font-size="22" letter-spacing="7">' +
+      esc(type.name.toUpperCase()) +
+    '</text>' +
+    '<text x="14" y="218" fill="#2f363d" ' +
+          'font-family="Arial Narrow, Arial" font-size="9" letter-spacing="1.5">' +
+      esc("REF " + contract.id.toUpperCase()) +
+    '</text>' +
+  '</svg>';
+}
+
+function renderMain(state) {
+  const contract = selectedContract();
+  const active = activeContract();
+  const type = contract ? findType(contract.typeId) : null;
+  const tier = contract ? findTier(contract.tierId) : null;
+
+  /* Work out the button and the note together, because they describe the
+     same situation and must never contradict each other. */
+  let buttonLabel = "Accept";
+  let buttonClass = "btn btn--primary";
+  let buttonDisabled = true;
+  let note = "Select a contract";
+
+  if (contract && contract.status === "active") {
+    buttonLabel = "Complete";
+    buttonClass = "btn btn--go";
+    buttonDisabled = false;
+    note = esc(type.name) + " in progress";
+  } else if (contract && active) {
+    buttonDisabled = true;
+    note = esc(findType(active.typeId).name) + " already in progress";
+  } else if (contract) {
+    buttonDisabled = false;
+    note = "Awaiting authorisation";
+  }
+
+  el.main.innerHTML = '' +
+    '<div class="tabhead">' +
+      '<span class="tabhead__name">' + (type ? esc(type.name) : "Contract Database") + '</span>' +
+      (tier ? '<span class="tabhead__tier">' + esc(tier.name) + '</span>' : "") +
+    '</div>' +
+
+    '<div class="display">' + renderDisplay(contract) + '</div>' +
+
+    '<div class="brief">' + (type ? esc(type.brief) : "&mdash;") + '</div>' +
+
+    '<div class="details">' +
+      '<div class="detail">' +
+        '<div class="detail__label">Level</div>' +
+        '<div class="detail__value">' + (tier ? esc(tier.name) : "&mdash;") + '</div>' +
+      '</div>' +
+      '<div class="detail">' +
+        '<div class="detail__label">Payment</div>' +
+        '<div class="detail__value is-money">' +
+          (contract ? esc(money(contract.payout)) : "&mdash;") +
+        '</div>' +
+      '</div>' +
+    '</div>' +
+
+    '<div class="actions">' +
+      '<span class="actions__note">' + note + '</span>' +
+      '<button type="button" class="' + buttonClass + '" id="btn-primary"' +
+        (buttonDisabled ? " disabled" : "") + '>' + buttonLabel + '</button>' +
+    '</div>';
+}
+
+function render() {
+  const stats = deriveStats(state);
+  renderSidebar(state);
+  renderVip(stats);
+  renderStats(state, stats);
+  renderMain(state);
+}
+
+
+/* ==========================================================================
+   6. WIRE UP
+   ========================================================================== */
+
+/* One listener on the list container, not one per row. This is called
+   "event delegation": a click on a row bubbles up to the container, and
+   the container works out which row it came from. It means rows can be
+   created and destroyed freely without ever rewiring anything -- which
+   matters here, because render() replaces all three on every redraw. */
+el.board.addEventListener("click", function (event) {
+  const row = event.target.closest(".row");
+  if (!row) return;
+  selectContract(row.dataset.id);
+});
+
+el.refresh.addEventListener("click", refreshBoard);
+
+/* The accept button is inside the region render() rewrites, so it gets
+   destroyed and rebuilt constantly. Delegating from the parent again. */
+el.main.addEventListener("click", function (event) {
+  if (event.target.closest("#btn-primary")) primaryAction();
+});
+
+/* Keyboard: up/down moves the selection, Enter presses the button. */
+document.addEventListener("keydown", function (event) {
+  /* Dev shortcuts first, so they work from anywhere. */
+  if (event.ctrlKey && event.shiftKey && (event.key === "D" || event.key === "d")) {
+    event.preventDefault();
+    devAddCompletions(25);
+    console.log("[cdb] added 25 test completions");
+    return;
+  }
+  if (event.ctrlKey && event.shiftKey && (event.key === "X" || event.key === "x")) {
+    event.preventDefault();
+    devReset();
+    console.log("[cdb] save wiped");
+    return;
+  }
+
+  if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Enter") return;
+
+  if (event.key === "Enter") {
+    /* Don't hijack Enter when a real button already has focus. */
+    if (document.activeElement && document.activeElement.tagName === "BUTTON") return;
+    event.preventDefault();
+    primaryAction();
+    return;
+  }
+
+  if (!state.board.length) return;
+  event.preventDefault();
+  const index = state.board.findIndex(function (c) { return c.id === state.selectedId; });
+  const step = event.key === "ArrowDown" ? 1 : -1;
+  const next = (index + step + state.board.length) % state.board.length;
+  selectContract(state.board[next].id);
+});
+
+/* The clock is the one thing allowed to write to the screen outside
+   render(), because it isn't derived from application state -- it's just
+   the time. Keeping that exception explicit is the point. */
+function tickClock() {
+  const now = new Date();
+  const time = now.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  el.clock.textContent = "LOS SANTOS  " + time;
+}
+
+/* Expose the internals on `window` so you can poke at the running app from
+   the browser console: type `cdb.state` and press enter. */
+window.cdb = {
+  get state() { return state; },
+  stats: function () { return deriveStats(state); },
+  addCompletions: devAddCompletions,
+  reset: devReset,
+  render: render,
+  TYPES: CONTRACT_TYPES,
+  TIERS: DIFFICULTY_TIERS,
+  RULES: RULES
+};
+
+tickClock();
+setInterval(tickClock, 15000);
+render();
+
+console.log(
+  "%c[contract database]%c ready\n" +
+  "  ctrl+shift+D  add 25 test completions\n" +
+  "  ctrl+shift+X  wipe the save\n" +
+  "  cdb.state     inspect the live state object",
+  "color:#8fd0d6;font-weight:bold", "color:inherit"
+);
+</script>
+</body>
+</html>
